@@ -1,0 +1,236 @@
+---
+title: "DATA 605 - Final"
+author: "Michael Muller"
+date: "December 18, 2017"
+output:
+  prettydoc::html_pretty:
+    highlight: github
+    theme: tactile
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options( warn = -1 )
+library(MASS)
+library(forecast)
+library(psych)
+```
+
+```{R}
+df = read.csv('train.csv')
+```
+##------------------------> Section 1
+
+![](probability.png)  
+
+I have chosen 'TotRmsAbvGrd' or Total Rooms above grade (does not include basement bedrooms)
+
+```{r}
+rbind(c('Min','Median','Max'),c(min(df$TotRmsAbvGrd),median(df$TotRmsAbvGrd),max(df$TotRmsAbvGrd)))
+```
+```{r}
+X = df$TotRmsAbvGrd
+x = quantile(X,.25)
+Y = df$SalePrice
+y = quantile(Y,.5)
+rbind(c('y','x'),c(y,x))
+```
+### a. P(X > x | Y > y)  
+
+```{R}
+denom = dim(df)[1]
+pab =  length(X[X>x&Y>y])/denom
+pb = length(Y[Y>y])/denom
+answera = pab/pb
+```
+The probability that 'Total Rooms above grade' will be above 6, given that the 'sale price' is above 163000 is `r answera`  
+
+Could more rooms be linked to a higher sale price!?
+
+### b. P(X > x & Y > y)  
+
+```{r}
+pa = length(X[X>x])/denom
+pb = length(Y[Y>y])/denom
+answerb = pa*pb
+```
+
+The probability that 'Total Rooms above grade' will be above 6, and 'sale price' will be above 163000 is `r answerb`  
+
+### c. P(X < x | Y > y) 
+
+```{r}
+pab =  length(X[X<x&Y>y])/denom
+pb = length(Y[Y>y])/denom
+answerc = pab/pb
+```  
+
+The probability that 'Total Rooms above grade' will be below 6, given that the 'sale price' is above 163000 is `r answerc`  
+
+### d. Does P(XY)=P(X)P(Y)?  Check mathematically and using CS Test  
+
+```{r}
+#Rule of multiplication P(A and B) = P(A) P(B|A)...P(A) P(B|A) vs P(A)P(B)
+pab == pb*pa
+```
+
+```{r}
+ct = table(df$TotRmsAbvGrd,df$SalePrice)
+chisq.test(ct)
+```  
+
+High degrees of freedom and an impossibly low p-value under 5% means that we would reject a null hypothesis, asserting that these variables are dependent.   
+
+Splitting the data in this manner does not make the variables independent.
+
+##------------------------> Section 2
+
+![](inference.png)
+
+### Univariate statistics + plots
+
+```{r} 
+describe(X) # Total Rooms Above Grade
+hist(X,main='Total Rooms Histogram',xlab='Total Rooms')
+```
+
+```{r}
+describe(Y) # Sale Price
+hist(Y,main='Sale Price histogram',ylab='Sale Price')
+```
+
+
+```{r}
+plot(x=X,xlab = 'Total Rooms',y=Y,ylab='Sale Price')
+abline(lm(Y~X))
+```
+
+### Boxcox transformation and comparative plots  
+
+```{r}
+slm = lm(Y~X) #Create simple regression model
+bc = boxcox(slm) # Find lambdas
+transformed_model = as.data.frame(bc) 
+lambdaM = bc$x[which.max(bc$y)] # Get lambda for model optimization; though we're not using it...Objective here is to transform both variables by themselves...Just showcasing
+lambdaX = BoxCox.lambda(X) # lambda for X
+lambdaY = BoxCox.lambda(Y) # lambda for Y
+```
+
+Lambdas are between -2 and 2 (`r lambdaM`), boxcox transformation is appropriate. 
+
+```{r}
+cox_saleprice =  Y^lambdaY
+cox_rooms = X^lambdaX
+par(mfrow=c(1,2))
+hist(Y,main="Sale Price")
+hist(cox_saleprice,main="Boxcox Trans of Y")
+par(mfrow=c(1,2))
+hist(X,main='Total Rooms')
+hist(cox_rooms,main='Boxcox Trans of X')
+```
+
+
+##------------------------> Section 3  
+
+![](algebra.png)  
+
+### 3 variables = Garage Area, Total Rooms Abv Grade, Sale Price
+
+```{r}
+adf = data.frame(GarageArea=df$GarageArea,Rooms=df$TotRmsAbvGrd,SalePrice=df$SalePrice)
+correlationMatrix = cor(adf)
+correlationMatrix
+```
+
+```{r}
+invertedCorrelationMatrix = solve(correlationMatrix)
+invertedCorrelationMatrix
+```
+
+```{r}
+round(correlationMatrix%*%invertedCorrelationMatrix,0)
+```
+
+```{r}
+round(invertedCorrelationMatrix%*%correlationMatrix,0)
+```
+
+Ladies and gentlemen, the identity matrix!
+
+##------------------------> Section 4  
+
+![](calculus.png)  
+
+
+As seen before; total rooms variable is between 2 & 14. No location shift is necessary  
+
+I believe the total rooms variable looks similar to a lognormal distribution. Let us see if I'm right.
+
+```{r}
+aFit = fitdistr(X,'log-normal')
+optimalLogDist = rlnorm(1000,meanlog = aFit$estimate[[1]],sdlog = aFit$estimate[[2]])
+par(mfrow=c(1,2))
+hist(X,main='Total Rooms')
+hist(optimalLogDist,main='fitted lognormal distribution')
+```
+
+These histograms are are very similar, perhaps a boxplot might help interpret the differences.  
+
+
+```{r}
+boxplot(X,main='Total Rooms')
+boxplot(optimalLogDist,main='Sample Lognormal Dist')
+```
+
+Looks like the lognormal distribution, with optimal parameters produces many high valued outliers (as expected of lognormal to have a greater right skew) and raises the 1st & 3rd quartiles + median.  While keeping the distance between max and min relatively the same.  
+
+##------------------------> Section 5  
+
+![](model.png)  
+
+### Build some type of regression model : Multiple linear regression  
+
+```{r}
+trainDF = data.frame(condition = df$OverallCond, quality = df$OverallQual, rooms = df$TotRmsAbvGrd, area = df$LotArea)
+mlr = lm(Y~. , data=trainDF)
+```
+
+### Model Summary  
+
+```{r}
+summary(mlr)
+```
+
+High F-Statistic with an impossibly low p-value. We see a trend in my model to undervalue most sales. I imagine this is the direct result of having many low value observations with high leverage. This model explains almost 70% of the response variable variation.
+
+### Model Analysis
+
+```{r}
+plot(mlr$residuals)
+abline(0,0)
+```
+
+This model fits very well according to standard residual plot
+
+### Analysis
+
+```{R}
+par(mfrow = c(2,2))
+plot(mlr)
+```
+
+My model performs well. These plots tell me my initial impression was correct; it was low value, high leverage observations that created an undervaluing trend in Sale Price. in order to come up with a much stronger model I would need to look at many more variables in order to determine which properties have unique aspects, treat them as outliers and remove them from the model fitting process. Judging from the normal Q-Q plot; I would want to slice off both extreme high and extreme low sale price observations for a better estimate on most Lots.  
+
+
+
+```{r}
+kaggleDF = read.csv('test.csv')
+kaggleDF = data.frame(Id=kaggleDF$Id,condition=kaggleDF$OverallCond,quality=kaggleDF$OverallQual,rooms = kaggleDF$TotRmsAbvGrd, area=kaggleDF$LotArea)
+predictions = cbind(kaggleDF$Id,predict(mlr,kaggleDF))
+colnames(predictions) = c('Id','SalePrice')
+#write.csv(predictions,'C:/Users/Exped/Desktop/Data 604 Final/submission.csv',row.names=FALSE)
+```
+
+
+
+![](submission.png)
